@@ -643,8 +643,8 @@ struct __CFRunLoop {
     volatile _per_run_data *_perRunData;              // reset for runs of the run loop
     pthread_t _pthread; //所关联的thread
     uint32_t _winthread;
-    CFMutableSetRef _commonModes;
-    CFMutableSetRef _commonModeItems;
+    CFMutableSetRef _commonModes; // 集合，所有标记为common的mode的集合
+    CFMutableSetRef _commonModeItems; // 集合，commonMode的item（observers/sources/timers）的集合
     CFRunLoopModeRef _currentMode; //当前运行的RunloopMode
     CFMutableSetRef _modes; //RunloopMode集合
     struct _block_item *_blocks_head;
@@ -755,6 +755,7 @@ CF_INLINE void __CFRunLoopLockInit(pthread_mutex_t *lock) {
 }
 
 /* call with rl locked, returns mode locked */
+// 在Runloop的modes中查询以modeName为名称的mode
 static CFRunLoopModeRef __CFRunLoopFindMode(CFRunLoopRef rl, CFStringRef modeName, Boolean create) {
     CHECK_FOR_FORK();
     CFRunLoopModeRef rlm;
@@ -764,15 +765,15 @@ static CFRunLoopModeRef __CFRunLoopFindMode(CFRunLoopRef rl, CFStringRef modeNam
     srlm._name = modeName;
     rlm = (CFRunLoopModeRef)CFSetGetValue(rl->_modes, &srlm);
     if (NULL != rlm) {
-	__CFRunLoopModeLock(rlm);
-	return rlm;
+        __CFRunLoopModeLock(rlm);
+        return rlm;
     }
     if (!create) {
-	return NULL;
+	    return NULL;
     }
     rlm = (CFRunLoopModeRef)_CFRuntimeCreateInstance(kCFAllocatorSystemDefault, __kCFRunLoopModeTypeID, sizeof(struct __CFRunLoopMode) - sizeof(CFRuntimeBase), NULL);
     if (NULL == rlm) {
-	return NULL;
+	    return NULL;
     }
     __CFRunLoopLockInit(&rlm->_lock);
     rlm->_name = CFStringCreateCopy(kCFAllocatorSystemDefault, modeName);
@@ -985,12 +986,12 @@ CF_INLINE void __CFRunLoopSourceUnlock(CFRunLoopSourceRef rls) {
 struct __CFRunLoopObserver {
     CFRuntimeBase _base;
     pthread_mutex_t _lock;
-    CFRunLoopRef _runLoop;
-    CFIndex _rlCount;
-    CFOptionFlags _activities;		/* immutable */
-    CFIndex _order;			/* immutable */
-    CFRunLoopObserverCallBack _callout;	/* immutable */
-    CFRunLoopObserverContext _context;	/* immutable, except invalidation */
+    CFRunLoopRef _runLoop; // 所处的Runloop
+    CFIndex _rlCount; // observer当前监测的runLoop数量，主要在安排/移除runLoop的时候用到
+    CFOptionFlags _activities;		/* immutable */ //要监听的状态集合
+    CFIndex _order;			/* immutable */ // Observer优先级，_order高先调用
+    CFRunLoopObserverCallBack _callout;	/* immutable */ // Observer状态监听毁掉函数
+    CFRunLoopObserverContext _context;	/* immutable, except invalidation */ //Observer上下文
 };
 
 /* Bit 0 of the base reserved bits is used for firing state */
@@ -1030,20 +1031,22 @@ CF_INLINE void __CFRunLoopObserverUnlock(CFRunLoopObserverRef rlo) {
     pthread_mutex_unlock(&(rlo->_lock));
 }
 
+// 将Observer加入调度
 static void __CFRunLoopObserverSchedule(CFRunLoopObserverRef rlo, CFRunLoopRef rl, CFRunLoopModeRef rlm) {
     __CFRunLoopObserverLock(rlo);
     if (0 == rlo->_rlCount) {
-	rlo->_runLoop = rl;
+	    rlo->_runLoop = rl;
     }
     rlo->_rlCount++;
     __CFRunLoopObserverUnlock(rlo);
 }
 
+// 将Observer取消调度
 static void __CFRunLoopObserverCancel(CFRunLoopObserverRef rlo, CFRunLoopRef rl, CFRunLoopModeRef rlm) {
     __CFRunLoopObserverLock(rlo);
     rlo->_rlCount--;
     if (0 == rlo->_rlCount) {
-	rlo->_runLoop = NULL;
+	    rlo->_runLoop = NULL;
     }
     __CFRunLoopObserverUnlock(rlo);
 }
@@ -1141,12 +1144,12 @@ static void __CFRunLoopCleanseSources(const void *value, void *context) {
     if (rlm->_sources0) CFSetGetValues(rlm->_sources0, list);
     if (rlm->_sources1) CFSetGetValues(rlm->_sources1, list + (rlm->_sources0 ? CFSetGetCount(rlm->_sources0) : 0));
     for (idx = 0; idx < cnt; idx++) {
-	CFRunLoopSourceRef rls = (CFRunLoopSourceRef)list[idx];
-	__CFRunLoopSourceLock(rls);
-	if (NULL != rls->_runLoops) {
-	    CFBagRemoveValue(rls->_runLoops, rl);
-	}
-	__CFRunLoopSourceUnlock(rls);
+	    CFRunLoopSourceRef rls = (CFRunLoopSourceRef)list[idx];
+	    __CFRunLoopSourceLock(rls);
+        if (NULL != rls->_runLoops) {
+            CFBagRemoveValue(rls->_runLoops, rl);
+        }
+	    __CFRunLoopSourceUnlock(rls);
     }
     if (list != buffer) CFAllocatorDeallocate(kCFAllocatorSystemDefault, list);
 }
@@ -1163,7 +1166,7 @@ static void __CFRunLoopDeallocateSources(const void *value, void *context) {
     if (rlm->_sources0) CFSetGetValues(rlm->_sources0, list);
     if (rlm->_sources1) CFSetGetValues(rlm->_sources1, list + (rlm->_sources0 ? CFSetGetCount(rlm->_sources0) : 0));
     for (idx = 0; idx < cnt; idx++) {
-	CFRetain(list[idx]);
+	    CFRetain(list[idx]);
     }
     if (rlm->_sources0) CFSetRemoveAllValues(rlm->_sources0);
     if (rlm->_sources1) CFSetRemoveAllValues(rlm->_sources1);
@@ -1184,11 +1187,12 @@ static void __CFRunLoopDeallocateSources(const void *value, void *context) {
                 __CFPortSetRemove(port, rlm->_portSet);
             }
         }
-	CFRelease(rls);
+	    CFRelease(rls);
     }
     if (list != buffer) CFAllocatorDeallocate(kCFAllocatorSystemDefault, list);
 }
 
+// 取消分配Observers
 static void __CFRunLoopDeallocateObservers(const void *value, void *context) {
     CFRunLoopModeRef rlm = (CFRunLoopModeRef)value;
     CFRunLoopRef rl = (CFRunLoopRef)context;
@@ -1199,12 +1203,12 @@ static void __CFRunLoopDeallocateObservers(const void *value, void *context) {
     list = (const void **)((cnt <= 256) ? buffer : CFAllocatorAllocate(kCFAllocatorSystemDefault, cnt * sizeof(void *), 0));
     CFArrayGetValues(rlm->_observers, CFRangeMake(0, cnt), list);
     for (idx = 0; idx < cnt; idx++) {
-	CFRetain(list[idx]);
+	    CFRetain(list[idx]);
     }
     CFArrayRemoveAllValues(rlm->_observers);
     for (idx = 0; idx < cnt; idx++) {
-	__CFRunLoopObserverCancel((CFRunLoopObserverRef)list[idx], rl, rlm);
-	CFRelease(list[idx]);
+	    __CFRunLoopObserverCancel((CFRunLoopObserverRef)list[idx], rl, rlm);
+	    CFRelease(list[idx]);
     }
     if (list != buffer) CFAllocatorDeallocate(kCFAllocatorSystemDefault, list);
 }
@@ -1256,28 +1260,28 @@ static void __CFRunLoopDeallocate(CFTypeRef cf) {
        three lines. */
     __CFRunLoopSetDeallocating(rl);
     if (NULL != rl->_modes) {
-	CFSetApplyFunction(rl->_modes, (__CFRunLoopCleanseSources), rl); // remove references to rl
-	CFSetApplyFunction(rl->_modes, (__CFRunLoopDeallocateSources), rl);
-	CFSetApplyFunction(rl->_modes, (__CFRunLoopDeallocateObservers), rl);
-	CFSetApplyFunction(rl->_modes, (__CFRunLoopDeallocateTimers), rl);
+        CFSetApplyFunction(rl->_modes, (__CFRunLoopCleanseSources), rl); // remove references to rl
+        CFSetApplyFunction(rl->_modes, (__CFRunLoopDeallocateSources), rl);
+        CFSetApplyFunction(rl->_modes, (__CFRunLoopDeallocateObservers), rl);
+        CFSetApplyFunction(rl->_modes, (__CFRunLoopDeallocateTimers), rl);
     }
     __CFRunLoopLock(rl);
     struct _block_item *item = rl->_blocks_head;
     while (item) {
-	struct _block_item *curr = item;
-	item = item->_next;
-	CFRelease(curr->_mode);
-	Block_release(curr->_block);
-	free(curr);
+        struct _block_item *curr = item;
+        item = item->_next;
+        CFRelease(curr->_mode);
+        Block_release(curr->_block);
+        free(curr);
     }
     if (NULL != rl->_commonModeItems) {
-	CFRelease(rl->_commonModeItems);
+	    CFRelease(rl->_commonModeItems);
     }
     if (NULL != rl->_commonModes) {
-	CFRelease(rl->_commonModes);
+	    CFRelease(rl->_commonModes);
     }
     if (NULL != rl->_modes) {
-	CFRelease(rl->_modes);
+	    CFRelease(rl->_modes);
     }
     __CFPortFree(rl->_wakeUpPort);
     rl->_wakeUpPort = CFPORT_NULL;
