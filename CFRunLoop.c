@@ -1732,17 +1732,17 @@ static void __CFRunLoopCollectSources0(const void *value, void *context) {
     CFRunLoopSourceRef rls = (CFRunLoopSourceRef)value;
     CFTypeRef *sources = (CFTypeRef *)context;
     if (0 == rls->_context.version0.version && __CFIsValid(rls) && __CFRunLoopSourceIsSignaled(rls)) {
-	if (NULL == *sources) {
-	    *sources = CFRetain(rls);
-	} else if (CFGetTypeID(*sources) == CFRunLoopSourceGetTypeID()) {
-	    CFTypeRef oldrls = *sources;
-	    *sources = CFArrayCreateMutable(kCFAllocatorSystemDefault, 0, &kCFTypeArrayCallBacks);
-	    CFArrayAppendValue((CFMutableArrayRef)*sources, oldrls);
-	    CFArrayAppendValue((CFMutableArrayRef)*sources, rls);
-	    CFRelease(oldrls);
-	} else {
-	    CFArrayAppendValue((CFMutableArrayRef)*sources, rls);
-	}
+        if (NULL == *sources) {
+            *sources = CFRetain(rls);
+        } else if (CFGetTypeID(*sources) == CFRunLoopSourceGetTypeID()) {
+            CFTypeRef oldrls = *sources;
+            *sources = CFArrayCreateMutable(kCFAllocatorSystemDefault, 0, &kCFTypeArrayCallBacks);
+            CFArrayAppendValue((CFMutableArrayRef)*sources, oldrls);
+            CFArrayAppendValue((CFMutableArrayRef)*sources, rls);
+            CFRelease(oldrls);
+        } else {
+            CFArrayAppendValue((CFMutableArrayRef)*sources, rls);
+        }
     }
 }
 
@@ -2343,6 +2343,7 @@ static void __CFRunLoopTimeout(void *arg) {
 
 /* rl, rlm are locked on entrance and exit */
 static int32_t __CFRunLoopRun(CFRunLoopRef rl, CFRunLoopModeRef rlm, CFTimeInterval seconds, Boolean stopAfterHandle, CFRunLoopModeRef previousMode) {
+    // 获取当前时间戳
     uint64_t startTSR = mach_absolute_time();
 
     // 检查状态是否是已经停止的
@@ -2691,24 +2692,27 @@ SInt32 CFRunLoopRunSpecific(CFRunLoopRef rl, CFStringRef modeName, CFTimeInterva
     CHECK_FOR_FORK();
     if (__CFRunLoopIsDeallocating(rl)) return kCFRunLoopRunFinished;
     __CFRunLoopLock(rl);
+    /// 首先根据modeName找到对应mode
     CFRunLoopModeRef currentMode = __CFRunLoopFindMode(rl, modeName, false);
+    /// 如果mode里没有source/timer/observer, 直接返回
     if (NULL == currentMode || __CFRunLoopModeIsEmpty(rl, currentMode, rl->_currentMode)) {
-	Boolean did = false;
-	if (currentMode) __CFRunLoopModeUnlock(currentMode);
-	__CFRunLoopUnlock(rl);
-	return did ? kCFRunLoopRunHandledSource : kCFRunLoopRunFinished;
+	    Boolean did = false;
+	    if (currentMode) __CFRunLoopModeUnlock(currentMode);
+	    __CFRunLoopUnlock(rl);
+	    return did ? kCFRunLoopRunHandledSource : kCFRunLoopRunFinished;
     }
     volatile _per_run_data *previousPerRun = __CFRunLoopPushPerRunData(rl);
     CFRunLoopModeRef previousMode = rl->_currentMode;
     rl->_currentMode = currentMode;
     int32_t result = kCFRunLoopRunFinished;
 
+    // 1. 通知 Observers: RunLoop 即将进入 loop。
 	if (currentMode->_observerMask & kCFRunLoopEntry ) __CFRunLoopDoObservers(rl, currentMode, kCFRunLoopEntry);
 	result = __CFRunLoopRun(rl, currentMode, seconds, returnAfterSourceHandled, previousMode);
+    /// 10. 通知 Observers: RunLoop 即将退出。
 	if (currentMode->_observerMask & kCFRunLoopExit ) __CFRunLoopDoObservers(rl, currentMode, kCFRunLoopExit);
-
-        __CFRunLoopModeUnlock(currentMode);
-        __CFRunLoopPopPerRunData(rl, previousPerRun);
+    __CFRunLoopModeUnlock(currentMode);
+    __CFRunLoopPopPerRunData(rl, previousPerRun);
 	rl->_currentMode = previousMode;
     __CFRunLoopUnlock(rl);
     return result;
